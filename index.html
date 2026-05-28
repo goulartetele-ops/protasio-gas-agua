@@ -475,7 +475,7 @@ const FORMAS_PAGAMENTO = [
 const PRODUTOS = [
   "P13 Nacional", "P20 Nacional", "P45 Nacional", "P5",
   "Água", "Casco Água", "Casco P13", "Casco P20", "Casco P45", "Casco P5",
-  "Detergente", "Refrigerante", "Kit Válvula", "Mangote"
+  "Kit Válvula", "Mangote"
 ];
 
 const CAMPOS_CAIXA = [
@@ -497,10 +497,12 @@ const REGEX_FORMAS = new RegExp(
   "gi"
 );
 
-const REGEX_PRODUTO = new RegExp(
-  "(" + PRODUTOS.map(escapeRegex).join("|") + ")\\s+(\\d+)\\s+([\\d.]+,\\d{2})",
-  "i"
-);
+function regexProdutoInicio() {
+  return new RegExp(
+    "(" + PRODUTOS.map(escapeRegex).join("|") + ")\\s+(\\d+)\\s+([\\d.]+,\\d{2})",
+    "gi"
+  );
+}
 
 function num(v) {
   if (!v) return 0;
@@ -557,20 +559,64 @@ function prioridadePagamento(texto) {
   return 4;
 }
 
-function add(grupo, produto, qtde, unitario, total, pagamentoTexto, pixReal, gasReal, demaisReal) {
+function add(grupo, produto, qtde, unitario, total, pagamentoTexto) {
   const unitarioChave = pagamentoTexto.includes("Gás do Povo") ? unitario.toFixed(2) : String(Math.round(unitario));
   const unitarioExibicao = pagamentoTexto.includes("Gás do Povo") ? unitario : Math.round(unitario);
   const chave = `${pagamentoTexto}|${produto}|${unitarioChave}`;
 
   if (!grupo[chave]) {
-    grupo[chave] = { produto, qtde: 0, unitario: unitarioExibicao, total: 0, pagamento: pagamentoTexto, pixReal: 0, gasReal: 0, demaisReal: 0 };
+    grupo[chave] = {
+      produto,
+      qtde: 0,
+      unitario: unitarioExibicao,
+      total: 0,
+      pagamento: pagamentoTexto
+    };
   }
 
   grupo[chave].qtde += qtde;
   grupo[chave].total += total;
-  grupo[chave].pixReal += pixReal;
-  grupo[chave].gasReal += gasReal;
-  grupo[chave].demaisReal += demaisReal;
+}
+
+function extrairProdutosDoPedido(bloco) {
+  const matches = [...bloco.matchAll(regexProdutoInicio())];
+  const produtos = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const atual = matches[i];
+    const inicio = atual.index;
+    const fim = i + 1 < matches.length ? matches[i + 1].index : bloco.length;
+    const trechoProduto = bloco.slice(inicio, fim);
+
+    const formaRegex = new RegExp(
+      "(" + FORMAS_PAGAMENTO.map(escapeRegex).join("|") + ")\\s+[\\d.]+,\\d{2}",
+      "i"
+    );
+
+    const formaMatch = trechoProduto.match(formaRegex);
+    const trechoAntesDoPagamento = formaMatch
+      ? trechoProduto.slice(0, formaMatch.index)
+      : trechoProduto;
+
+    const valores = [...trechoAntesDoPagamento.matchAll(/[\\d.]+,\\d{2}/g)].map(v => num(v[0]));
+
+    const produto = nomeProduto(atual[1]);
+    const qtde = Number(atual[2]);
+    const unitario = num(atual[3]);
+
+    const totalLinha = valores.length >= 2
+      ? valores[valores.length - 1]
+      : unitario * qtde;
+
+    produtos.push({
+      produto,
+      qtde,
+      unitario,
+      total: totalLinha
+    });
+  }
+
+  return produtos;
 }
 
 function gerarResumo() {
@@ -583,9 +629,15 @@ function gerarResumo() {
 
   const corteResumo = textoOriginal.search(/TOTAIS POR FORMA DE PAGAMENTO/i);
   const textoPedidos = corteResumo >= 0 ? textoOriginal.slice(0, corteResumo) : textoOriginal;
+
   const grupo = {};
   const pedidosLidos = [];
   const pedidosIgnorados = [];
+
+  let totalPixReal = 0;
+  let totalGasReal = 0;
+  let totalDemaisReal = 0;
+
   const inicios = [...textoPedidos.matchAll(/(?:^|\n)(\d{4,6})\s+\[\d+\]/g)];
 
   if (!inicios.length) {
@@ -600,17 +652,14 @@ function gerarResumo() {
     const pedido = inicios[i][1];
 
     const totalPedidoMatch = bloco.match(/\b[A-Za-zÀ-ÿ]+\s+([\d.]+,\d{2})\s+(?=P13 Nacional|P20 Nacional|P45 Nacional|P5|Água|Casco Água|Casco P13|Casco P20|Casco P45|Casco P5|Detergente|Refrigerante|Kit Válvula|Mangote)/i);
-    const produtoMatch = bloco.match(REGEX_PRODUTO);
+    const produtosDoPedido = extrairProdutosDoPedido(bloco);
 
-    if (!totalPedidoMatch || !produtoMatch) {
+    if (!totalPedidoMatch || !produtosDoPedido.length) {
       pedidosIgnorados.push(pedido);
       continue;
     }
 
     const totalPedido = num(totalPedidoMatch[1]);
-    const produto = nomeProduto(produtoMatch[1]);
-    const qtdeProduto = Number(produtoMatch[2]);
-    const unitarioProduto = num(produtoMatch[3]);
     const pagamentosEncontrados = [...bloco.matchAll(REGEX_FORMAS)];
     const pagamentosValidos = [];
     let somaPagamentos = 0;
@@ -619,6 +668,7 @@ function gerarResumo() {
       const valor = num(p[2]);
       pagamentosValidos.push({ forma: formaSimplificada(p[1]), valor });
       somaPagamentos += valor;
+
       if (Math.abs(somaPagamentos - totalPedido) < 0.02) break;
     }
 
@@ -630,51 +680,76 @@ function gerarResumo() {
     pedidosLidos.push(pedido);
 
     const pagamentoTexto = montarPagamentoTexto(pagamentosValidos);
-    const pixReal = pagamentosValidos.filter(p => p.forma === "PIX").reduce((s, p) => s + p.valor, 0);
-    const gasReal = pagamentosValidos.filter(p => p.forma === "Gás do Povo").reduce((s, p) => s + p.valor, 0);
-    const demaisReal = pagamentosValidos.filter(p => p.forma === "Demais").reduce((s, p) => s + p.valor, 0);
 
-    add(grupo, produto, qtdeProduto, unitarioProduto, totalPedido, pagamentoTexto, pixReal, gasReal, demaisReal);
+    totalPixReal += pagamentosValidos
+      .filter(p => p.forma === "PIX")
+      .reduce((s, p) => s + p.valor, 0);
+
+    totalGasReal += pagamentosValidos
+      .filter(p => p.forma === "Gás do Povo")
+      .reduce((s, p) => s + p.valor, 0);
+
+    totalDemaisReal += pagamentosValidos
+      .filter(p => p.forma === "Demais")
+      .reduce((s, p) => s + p.valor, 0);
+
+    produtosDoPedido.forEach(item => {
+      add(
+        grupo,
+        item.produto,
+        item.qtde,
+        item.unitario,
+        item.total,
+        pagamentoTexto
+      );
+    });
   }
-
-  const linhas = Object.values(grupo).sort((a, b) => {
+    const linhas = Object.values(grupo).sort((a, b) => {
     const ordemA = prioridadePagamento(a.pagamento);
     const ordemB = prioridadePagamento(b.pagamento);
+
     if (ordemA !== ordemB) return ordemA - ordemB;
     if (a.produto !== b.produto) return a.produto.localeCompare(b.produto);
     return a.unitario - b.unitario;
   });
 
-  let totalPixReal = 0;
-  let totalGasReal = 0;
-  let totalDemaisReal = 0;
-
   let html = `<div class="table-wrap"><table><thead><tr><th>Produto</th><th class="num">Qtde</th><th class="num">Valor Unit.</th><th class="num">Total</th><th>Pagamento</th></tr></thead><tbody>`;
 
   linhas.forEach(l => {
-    totalPixReal += l.pixReal;
-    totalGasReal += l.gasReal;
-    totalDemaisReal += l.demaisReal;
     html += `<tr><td>${l.produto}</td><td class="num">${Number.isInteger(l.qtde) ? l.qtde : l.qtde.toFixed(2)}</td><td class="num">${exibirMoeda(l.unitario, l.pagamento)}</td><td class="num">${exibirMoeda(l.total, l.pagamento)}</td><td>${l.pagamento}</td></tr>`;
   });
 
   const totalBruto = totalPixReal + totalGasReal + totalDemaisReal;
   totalResumoGlobal = Math.round(totalPixReal) + totalGasReal + Math.round(totalDemaisReal);
+
   const totais = [...textoOriginal.matchAll(/^TOTAL\s+([\d.]+,\d{2})$/gmi)];
   const totalRelatorio = totais.length ? num(totais[0][1]) : null;
 
   html += `</tbody></table></div>`;
 
-  html += `<div class="kpis"><div class="kpi"><span>Total PIX</span><strong>${brlSemCentavos(Math.round(totalPixReal))}</strong></div><div class="kpi"><span>Total Gás do Povo</span><strong>${brl(totalGasReal)}</strong></div><div class="kpi"><span>Total Demais</span><strong>${brlSemCentavos(Math.round(totalDemaisReal))}</strong></div><div class="kpi"><span>Total Resumo</span><strong>${brl(totalResumoGlobal)}</strong></div><div class="kpi"><span>Total Bruto Calculado</span><strong>${brl(totalBruto)}</strong></div><div class="kpi"><span>Total do Relatório</span><strong>${totalRelatorio !== null ? brl(totalRelatorio) : "não encontrado"}</strong></div></div>`;
+  html += `<div class="kpis">
+    <div class="kpi"><span>Total PIX</span><strong>${brlSemCentavos(Math.round(totalPixReal))}</strong></div>
+    <div class="kpi"><span>Total Gás do Povo</span><strong>${brl(totalGasReal)}</strong></div>
+    <div class="kpi"><span>Total Demais</span><strong>${brlSemCentavos(Math.round(totalDemaisReal))}</strong></div>
+    <div class="kpi"><span>Total Resumo</span><strong>${brl(totalResumoGlobal)}</strong></div>
+    <div class="kpi"><span>Total Bruto Calculado</span><strong>${brl(totalBruto)}</strong></div>
+    <div class="kpi"><span>Total do Relatório</span><strong>${totalRelatorio !== null ? brl(totalRelatorio) : "não encontrado"}</strong></div>
+  </div>`;
 
   if (totalRelatorio !== null) {
     const diferenca = totalBruto - totalRelatorio;
+
     html += Math.abs(diferenca) < 0.02
       ? `<div class="alert alert-ok">Resumo conferido: FECHOU.</div>`
       : `<div class="alert alert-error">Resumo não fechou. Diferença: ${brl(diferenca)}.</div>`;
   }
 
-  html += `<div class="alert alert-info"><b>Conferência:</b><br>Pedidos lidos: <b>${pedidosLidos.length}</b><br>${pedidosLidos.join(", ") || "Nenhum"}<br><br>Pedidos ignorados: <b>${pedidosIgnorados.length}</b><br>${pedidosIgnorados.join(", ") || "Nenhum"}</div>`;
+  html += `<div class="alert alert-info"><b>Conferência:</b><br>
+    Pedidos lidos: <b>${pedidosLidos.length}</b><br>
+    ${pedidosLidos.join(", ") || "Nenhum"}<br><br>
+    Pedidos ignorados: <b>${pedidosIgnorados.length}</b><br>
+    ${pedidosIgnorados.join(", ") || "Nenhum"}
+  </div>`;
 
   document.getElementById("saida").innerHTML = html;
   montarFechamento();
@@ -690,18 +765,32 @@ function montarFechamento() {
   let html = `<div class="alert alert-info">Total do resumo que será usado no caixa: <b>${brl(totalResumoGlobal)}</b></div>`;
 
   CAMPOS_CAIXA.forEach(campo => {
-    html += `<div class="fieldset"><div class="fieldset-head"><div><h4>${campo.nome}</h4><div class="muted">${campo.ajuda}</div></div><div class="fieldset-total" id="${campo.id}-total">R$ 0,00</div></div><div id="${campo.id}-lista"></div><button class="btn-secondary btn-small" onclick="adicionarLinha('${campo.id}')">+ Adicionar ${campo.nome}</button></div>`;
+    html += `<div class="fieldset">
+      <div class="fieldset-head">
+        <div>
+          <h4>${campo.nome}</h4>
+          <div class="muted">${campo.ajuda}</div>
+        </div>
+        <div class="fieldset-total" id="${campo.id}-total">R$ 0,00</div>
+      </div>
+      <div id="${campo.id}-lista"></div>
+      <button class="btn-secondary btn-small" onclick="adicionarLinha('${campo.id}')">+ Adicionar ${campo.nome}</button>
+    </div>`;
   });
 
   html += `<div id="resultado-caixa"></div>`;
+
   document.getElementById("fechamento").innerHTML = html;
+
   CAMPOS_CAIXA.forEach(campo => adicionarLinha(campo.id));
+
   calcularCaixa();
 }
 
 function adicionarLinha(id) {
   const campo = CAMPOS_CAIXA.find(c => c.id === id);
   const lista = document.getElementById(`${id}-lista`);
+
   if (!lista) return;
 
   const div = document.createElement("div");
@@ -718,9 +807,12 @@ function adicionarLinha(id) {
 function totalCampo(id) {
   const inputs = document.querySelectorAll(`.valor-${id}`);
   let total = 0;
+
   inputs.forEach(input => total += num(input.value || "0,00"));
+
   const el = document.getElementById(`${id}-total`);
   if (el) el.innerText = brl(total);
+
   return total;
 }
 
@@ -732,7 +824,9 @@ function linhasCampo(id) {
 
   valores.forEach((input, index) => {
     const valor = num(input.value || "0,00");
+
     if (!valor) return;
+
     linhas.push({
       campo: campo.nome,
       descricao: campo.descricao && descricoes[index] ? descricoes[index].value.trim() : "",
@@ -753,6 +847,7 @@ function calcularCaixa() {
   const deposito = totalCampo("deposito");
 
   const resultado = totalResumoGlobal + trocoInicial - cartao - dinheiro - pix - gasto - deposito - trocoFinal;
+
   let statusClasse = "badge-error";
   let statusTexto = "Falta";
   let statusValor = brl(resultado);
@@ -766,11 +861,15 @@ function calcularCaixa() {
     statusValor = brl(Math.abs(resultado));
   }
 
-  let html = `<div class="alert ${statusClasse === "badge-ok" ? "alert-ok" : "alert-error"}"><span class="badge ${statusClasse}">${statusTexto}</span><div class="resultado-grande">${statusValor}</div></div>`;
+  let html = `<div class="alert ${statusClasse === "badge-ok" ? "alert-ok" : "alert-error"}">
+    <span class="badge ${statusClasse}">${statusTexto}</span>
+    <div class="resultado-grande">${statusValor}</div>
+  </div>`;
 
   html += `<div class="table-wrap"><table><thead><tr><th>Campo</th><th>Descrição</th><th class="num">Valor</th></tr></thead><tbody>`;
 
   let temLinha = false;
+
   CAMPOS_CAIXA.forEach(campo => {
     linhasCampo(campo.id).forEach(linha => {
       temLinha = true;
@@ -778,24 +877,42 @@ function calcularCaixa() {
     });
   });
 
-  if (!temLinha) html += `<tr><td colspan="3">Nenhum valor lançado ainda.</td></tr>`;
+  if (!temLinha) {
+    html += `<tr><td colspan="3">Nenhum valor lançado ainda.</td></tr>`;
+  }
 
   html += `</tbody></table></div>`;
 
-  html += `<div class="alert alert-info"><b>Cálculo:</b><br>Total Resumo: <b>${brl(totalResumoGlobal)}</b><br>+ Troco Inicial: <b>${brl(trocoInicial)}</b><br>- Cartão: <b>${brl(cartao)}</b><br>- Dinheiro: <b>${brl(dinheiro)}</b><br>- PIX: <b>${brl(pix)}</b><br>- Gasto: <b>${brl(gasto)}</b><br>- Depósito: <b>${brl(deposito)}</b><br>- Troco Final: <b>${brl(trocoFinal)}</b></div>`;
+  html += `<div class="alert alert-info"><b>Cálculo:</b><br>
+    Total Resumo: <b>${brl(totalResumoGlobal)}</b><br>
+    + Troco Inicial: <b>${brl(trocoInicial)}</b><br>
+    - Cartão: <b>${brl(cartao)}</b><br>
+    - Dinheiro: <b>${brl(dinheiro)}</b><br>
+    - PIX: <b>${brl(pix)}</b><br>
+    - Gasto: <b>${brl(gasto)}</b><br>
+    - Depósito: <b>${brl(deposito)}</b><br>
+    - Troco Final: <b>${brl(trocoFinal)}</b>
+  </div>`;
 
   const resultadoCaixa = document.getElementById("resultado-caixa");
+
   if (resultadoCaixa) resultadoCaixa.innerHTML = html;
 
-  document.getElementById("painel-resultado").innerHTML = `<div class="alert ${statusClasse === "badge-ok" ? "alert-ok" : "alert-error"}"><span class="badge ${statusClasse}">${statusTexto}</span><div class="resultado-grande">${statusValor}</div><p class="muted">Total resumo: ${brl(totalResumoGlobal)}</p></div>`;
+  document.getElementById("painel-resultado").innerHTML = `<div class="alert ${statusClasse === "badge-ok" ? "alert-ok" : "alert-error"}">
+    <span class="badge ${statusClasse}">${statusTexto}</span>
+    <div class="resultado-grande">${statusValor}</div>
+    <p class="muted">Total resumo: ${brl(totalResumoGlobal)}</p>
+  </div>`;
 }
 
 function limparTudo() {
   if (!confirm("Deseja limpar o relatório, resumo e fechamento?")) return;
+
   document.getElementById("relatorio").value = "";
   document.getElementById("saida").innerHTML = `<div class="empty">O resumo ainda não foi gerado.</div>`;
   document.getElementById("fechamento").innerHTML = `<div class="empty">Gere o resumo para liberar o fechamento.</div>`;
   document.getElementById("painel-resultado").innerHTML = `<div class="empty">Nenhum cálculo ainda.</div>`;
+
   totalResumoGlobal = 0;
 }
 
@@ -809,13 +926,18 @@ function gerarPDF() {
   }
 
   let conteudo = "";
+
   tabelasResumo.forEach(tabela => conteudo += tabela.outerHTML + "<br><br>");
+
   if (tabelaFechamento) conteudo += tabelaFechamento.outerHTML;
 
   const janela = window.open("", "_blank");
+
   janela.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Resumo KP</title><style>body{font-family:Arial,sans-serif;padding:20px;}table{border-collapse:collapse;width:100%;margin-bottom:20px;}th,td{border:1px solid #000;padding:6px;font-size:12px;}th{background:#f0f0f0;}.num{text-align:right;}</style></head><body>${conteudo}<script>window.onload=function(){window.print();};<\/script></body></html>`);
+
   janela.document.close();
 }
 </script>
+  
 </body>
 </html>
