@@ -1,3 +1,5 @@
+
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -309,13 +311,125 @@ tr:last-child td { border-bottom: 0; }
 
 .linha-caixa {
   display: grid;
-  grid-template-columns: 1fr 150px auto;
+  grid-template-columns: 1fr 140px 140px auto;
   gap: 8px;
   margin-bottom: 8px;
 }
 
 .linha-caixa.sem-desc {
   grid-template-columns: 1fr auto;
+}
+
+
+
+.linha-carga {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: end;
+}
+
+.conferencia-carga {
+  border: 1px solid var(--cinza-200);
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #fbfdff;
+}
+
+.conferencia-carga-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 920px) {
+  .linha-carga, .conferencia-carga-head { grid-template-columns: 1fr; }
+}
+
+
+.campo-wrap {
+  position: relative;
+}
+
+.campo-wrap label {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--cinza-700);
+  margin: 0 0 5px;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+.campo-wrap input:not(:placeholder-shown) + label,
+.campo-wrap input:focus + label {
+  display: none;
+}
+
+.campo-wrap input {
+  margin-top: 0;
+}
+
+.resultado-carga-destaque {
+  border-radius: 22px;
+  padding: 26px 18px;
+  margin: 18px 0;
+  text-align: center;
+  border: 3px solid var(--cinza-200);
+  background: var(--cinza-50);
+}
+
+.resultado-carga-destaque.ok {
+  background: var(--verde-bg);
+  color: var(--verde);
+  border-color: #98d9b5;
+}
+
+.resultado-carga-destaque.falta {
+  background: var(--vermelho-bg);
+  color: var(--vermelho);
+  border-color: #ef9a9a;
+}
+
+.resultado-carga-destaque.sobra {
+  background: #eaf2ff;
+  color: var(--azul-escuro);
+  border-color: #a9c8ff;
+}
+
+.resultado-carga-titulo {
+  font-size: clamp(30px, 5vw, 54px);
+  font-weight: 950;
+  line-height: 1.05;
+  letter-spacing: .01em;
+  text-transform: uppercase;
+}
+
+.resultado-carga-sub {
+  margin-top: 12px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.resultado-carga-mini {
+  margin-top: 10px;
+  font-size: 14px;
+  color: inherit;
+  opacity: .82;
+}
+
+@media print {
+  .resultado-carga-destaque {
+    border: 2px solid #000;
+    padding: 14px;
+  }
+  .resultado-carga-titulo {
+    font-size: 28px;
+  }
 }
 
 input {
@@ -439,6 +553,17 @@ input {
         </div>
         <div id="fechamento"><div class="empty">Gere o resumo para liberar o fechamento.</div></div>
       </section>
+
+      <section class="card fechamento-form" id="card-cargas">
+        <div class="card-header">
+          <div>
+            <h2>4. Conferência de carga</h2>
+            <p class="muted">Confira a carga de P13 da venda deste resumo.</p>
+          </div>
+          <span class="badge">Carga</span>
+        </div>
+        <div id="cargas"><div class="empty">Gere o resumo para liberar a conferência de carga.</div></div>
+      </section>
     </main>
 
     <aside class="sticky-panel">
@@ -451,9 +576,6 @@ input {
         <div class="actions no-print">
           <button class="btn-primary" onclick="gerarPDF()">Gerar PDF</button>
         </div>
-        <div class="alert alert-warning no-print">
-          O PDF contém apenas as tabelas do resumo e do fechamento, como solicitado.
-        </div>
       </section>
     </aside>
   </div>
@@ -465,6 +587,7 @@ input {
 
 <script>
 let totalResumoGlobal = 0;
+let p13VendidosGlobal = 0;
 
 const FORMAS_PAGAMENTO = [
   "CAIXA Gás do Povo", "CAIXA Gas do Povo",
@@ -713,6 +836,10 @@ function gerarResumo() {
     return a.unitario - b.unitario;
   });
 
+  p13VendidosGlobal = linhas
+    .filter(l => l.produto === "P13 Nacional")
+    .reduce((s, l) => s + l.qtde, 0);
+
   let html = `<div class="table-wrap"><table><thead><tr><th>Produto</th><th class="num">Qtde</th><th class="num">Valor Unit.</th><th class="num">Total</th><th>Pagamento</th></tr></thead><tbody>`;
 
   linhas.forEach(l => {
@@ -753,6 +880,7 @@ function gerarResumo() {
 
   document.getElementById("saida").innerHTML = html;
   montarFechamento();
+  montarCargas();
   document.getElementById("card-resumo").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -905,20 +1033,143 @@ function calcularCaixa() {
   </div>`;
 }
 
+
+function campoComTitulo(classe, titulo, valor = "", extra = "") {
+  return `<div class="campo-wrap">
+    <label>${titulo}</label>
+    <input type="text" inputmode="decimal" placeholder=" " class="${classe}" value="${valor}" ${extra}>
+  </div>`;
+}
+
+function montarCargas() {
+  let html = `<div class="alert alert-info">P13 vendidos no resumo: <b>${formatarQtd(p13VendidosGlobal)}</b></div>
+    <div class="conferencia-carga">
+      <div class="conferencia-carga-head">
+        ${campoComTitulo("vendidos-carga", "P13 vendidos", formatarQtd(p13VendidosGlobal), 'oninput="calcularCargas()"')}
+        ${campoComTitulo("carregados-carga", "P13 carregados", "", 'oninput="calcularCargas()"')}
+      </div>
+      <div class="caminhonetes-carga-lista"></div>
+      <div class="actions">
+        <button class="btn-secondary btn-small" onclick="adicionarCaminhoneteCarga(this)">+ Adicionar caminhonete</button>
+      </div>
+    </div>
+    <div id="resultado-cargas"></div>`;
+
+  document.getElementById("cargas").innerHTML = html;
+  const botao = document.querySelector("#cargas button.btn-secondary");
+  adicionarCaminhoneteCarga(botao);
+  calcularCargas();
+}
+
+function adicionarCaminhoneteCarga(botao) {
+  const bloco = botao.closest(".conferencia-carga");
+  const lista = bloco.querySelector(".caminhonetes-carga-lista");
+  const numero = lista.querySelectorAll(".linha-carga").length + 1;
+
+  const div = document.createElement("div");
+  div.className = "linha-carga";
+  div.innerHTML = `
+    ${campoComTitulo("inicial-carga", "Carga inicial caminhonete " + numero, "", 'oninput="calcularCargas()"')}
+    ${campoComTitulo("final-carga", "Carga final caminhonete " + numero, "", 'oninput="calcularCargas()"')}
+    <button class="btn-danger btn-small" onclick="this.parentElement.remove(); renumerarCaminhonetesCarga(); calcularCargas()">Remover</button>`;
+
+  lista.appendChild(div);
+  calcularCargas();
+}
+
+function renumerarCaminhonetesCarga() {
+  document.querySelectorAll(".linha-carga").forEach((linha, index) => {
+    const labels = linha.querySelectorAll("label");
+    if (labels[0]) labels[0].innerText = "Carga inicial caminhonete " + (index + 1);
+    if (labels[1]) labels[1].innerText = "Carga final caminhonete " + (index + 1);
+  });
+}
+
+function formatarQtd(v) {
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+function calcularCargas() {
+  const bloco = document.querySelector(".conferencia-carga");
+  const resultado = document.getElementById("resultado-cargas");
+  if (!bloco || !resultado) return;
+
+  const vendidosInformados = num(bloco.querySelector(".vendidos-carga")?.value || "0");
+  const carregados = num(bloco.querySelector(".carregados-carga")?.value || "0");
+  const linhasCaminhonete = [...bloco.querySelectorAll(".linha-carga")];
+  const qtdCaminhonetes = linhasCaminhonete.length;
+
+  const cargas = linhasCaminhonete.map(linha => ({
+    inicial: num(linha.querySelector(".inicial-carga")?.value || "0"),
+    final: num(linha.querySelector(".final-carga")?.value || "0")
+  }));
+
+  const somaIniciais = cargas.reduce((s, c) => s + c.inicial, 0);
+  const finaisExcetoUltima = qtdCaminhonetes > 1
+    ? cargas.slice(0, -1).reduce((s, c) => s + c.final, 0)
+    : 0;
+  const finalUltimaInformado = qtdCaminhonetes
+    ? cargas[qtdCaminhonetes - 1].final
+    : 0;
+
+  const cargaFinalEsperada = qtdCaminhonetes <= 1
+    ? somaIniciais + carregados - vendidosInformados
+    : carregados - vendidosInformados - finaisExcetoUltima + somaIniciais;
+
+  const diferencaFinal = finalUltimaInformado - cargaFinalEsperada;
+
+  let classeResultado = "ok";
+  let tituloResultado = "CONFERIDO";
+  let subtituloResultado = "Carga fechou";
+  let diferencaAbs = Math.abs(diferencaFinal);
+
+  if (diferencaFinal > 0.02) {
+    classeResultado = "sobra";
+    tituloResultado = `SOBRA ${formatarQtd(diferencaAbs)} P13`;
+    subtituloResultado = "Carga informada maior que a esperada";
+  } else if (diferencaFinal < -0.02) {
+    classeResultado = "falta";
+    tituloResultado = `FALTAM ${formatarQtd(diferencaAbs)} P13`;
+    subtituloResultado = "Carga informada menor que a esperada";
+  }
+
+  let html = `<div class="resultado-carga-destaque ${classeResultado}">
+    <div class="resultado-carga-titulo">${tituloResultado}</div>
+    <div class="resultado-carga-sub">${subtituloResultado}</div>
+    <div class="resultado-carga-mini">Esperado: <b>${formatarQtd(cargaFinalEsperada)}</b> | Informado: <b>${formatarQtd(finalUltimaInformado)}</b></div>
+  </div>`;
+
+  html += `<div class="table-wrap"><table><thead><tr><th class="num">Caminhonetes</th><th class="num">P13 vendidos</th><th class="num">P13 carregados</th><th class="num">Cargas iniciais</th><th class="num">Finais exceto última</th><th class="num">Final informado última</th><th class="num">Final esperado última</th><th>Status</th></tr></thead><tbody>`;
+
+  html += `<tr><td class="num">${qtdCaminhonetes}</td><td class="num">${formatarQtd(vendidosInformados)}</td><td class="num">${formatarQtd(carregados)}</td><td class="num">${formatarQtd(somaIniciais)}</td><td class="num">${formatarQtd(finaisExcetoUltima)}</td><td class="num">${formatarQtd(finalUltimaInformado)}</td><td class="num">${formatarQtd(cargaFinalEsperada)}</td><td>${tituloResultado}</td></tr>`;
+
+  html += `</tbody></table></div>`;
+
+  const diferencaVendidos = vendidosInformados - p13VendidosGlobal;
+  html += Math.abs(diferencaVendidos) < 0.02
+    ? `<div class="alert alert-ok">P13 vendidos conferem com o resumo.</div>`
+    : `<div class="alert alert-warning">P13 vendidos no resumo: <b>${formatarQtd(p13VendidosGlobal)}</b>. P13 vendidos informados: <b>${formatarQtd(vendidosInformados)}</b>. Diferença: <b>${formatarQtd(diferencaVendidos)}</b>.</div>`;
+
+  resultado.innerHTML = html;
+}
+
 function limparTudo() {
   if (!confirm("Deseja limpar o relatório, resumo e fechamento?")) return;
 
   document.getElementById("relatorio").value = "";
   document.getElementById("saida").innerHTML = `<div class="empty">O resumo ainda não foi gerado.</div>`;
   document.getElementById("fechamento").innerHTML = `<div class="empty">Gere o resumo para liberar o fechamento.</div>`;
+  document.getElementById("cargas").innerHTML = `<div class="empty">Gere o resumo para liberar a conferência de carga.</div>`;
   document.getElementById("painel-resultado").innerHTML = `<div class="empty">Nenhum cálculo ainda.</div>`;
 
   totalResumoGlobal = 0;
+  p13VendidosGlobal = 0;
 }
 
 function gerarPDF() {
   const tabelasResumo = document.querySelectorAll("#saida table");
   const tabelaFechamento = document.querySelector("#resultado-caixa table");
+  const tabelaCargas = document.querySelector("#resultado-cargas table");
 
   if (!tabelasResumo.length) {
     alert("Gere o resumo primeiro.");
@@ -929,7 +1180,8 @@ function gerarPDF() {
 
   tabelasResumo.forEach(tabela => conteudo += tabela.outerHTML + "<br><br>");
 
-  if (tabelaFechamento) conteudo += tabelaFechamento.outerHTML;
+  if (tabelaFechamento) conteudo += tabelaFechamento.outerHTML + "<br><br>";
+  if (tabelaCargas) conteudo += tabelaCargas.outerHTML;
 
   const janela = window.open("", "_blank");
 
